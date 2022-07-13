@@ -14,5 +14,9 @@ params:
 
   # configuration parameters
   correction:
+    ## single cube?
+    #1: [0, 0]
+    #2: [0, 0]
+
     1: [-9.597, 4.0021e-6]
     2: [-9.329, 1.1770e-6]

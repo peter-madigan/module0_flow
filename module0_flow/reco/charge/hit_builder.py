@@ -154,8 +154,10 @@ class HitBuilder(H5FlowStage):
                             + packets_arr['chip_id'].astype(int)) * 64 \
                 + packets_arr['channel_id'].astype(int)
             hit_uniqueid_str = hit_uniqueid.astype(str)
-            xy = resources['Geometry'].pixel_xy[packets_arr['io_group'],
-                                                packets_arr['io_channel'], packets_arr['chip_id'], packets_arr['channel_id']]
+            if resources['Geometry'].is_singlecube:
+                xy = resources['Geometry'].pixel_xy[packets_arr['chip_id'], packets_arr['channel_id']]
+            else:
+                xy = resources['Geometry'].pixel_xy[packets_arr['io_group'], packets_arr['io_channel'], packets_arr['chip_id'], packets_arr['channel_id']]
             vref = np.array(
                 [self.configuration[unique_id]['vref_mv'] for unique_id in hit_uniqueid_str])
             vcm = np.array([self.configuration[unique_id]['vcm_mv']

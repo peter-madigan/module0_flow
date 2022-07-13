@@ -19,3 +19,4 @@ params:
   ransac_residual_threshold: 8
   ransac_max_trials: 10
   trajectory_pts: 16
+  trajectory_residual_mode: 1 # 1: shortest distance to the segment ends  # 2: shortest distance to the tractory

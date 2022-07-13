@@ -7,7 +7,7 @@ params:
 
   # configuration parameters
   buffer_size: 384000
-  nhit_cut: 100
+  nhit_cut: 100 # need to lower the nhit_cut for singlecube data
   sync_noise_cut: [1000000, 11000000] # 1e6 cut based on Brooke's study
   sync_noise_cut_enabled: True
   event_builder_class: 'SymmetricWindowRawEventBuilder'

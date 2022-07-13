@@ -5,3 +5,5 @@ params:
   electron_lifetime_file: 'h5flow_data/ElecLifetimeFit_Module0.npz'
   # download link: https://portal.nersc.gov/project/dune/data/Module0/electronLifetime/ElecLifetimeFit_Module0.root
   electron_lifetime: 2600 # us
+  mode: 1 # choices of vdrift models: 1. LArSoft 2.BNL mobility measurement
+  temp: 90 # K

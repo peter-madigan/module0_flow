@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import logging
 import scipy.interpolate as interpolate
 import os
@@ -21,6 +22,8 @@ class LArData(H5FlowResource):
          - ``electron_mobility_params``: ``list``, electron mobility calculation parameters, see ``LArData.electron_mobility``
 
         Provides:
+         - ``mode``: choice of vdrift model; 1. LArSoft, 2. BNL mobility measurement
+         - ``temp``: LAr temperature in K
          - ``v_drift``: electron drift velocity in mm/us
          - ``ionization_w``: ionization W-value
          - ``density``: LAr density
@@ -44,12 +47,14 @@ class LArData(H5FlowResource):
                     path: 'lar_info'
 
     '''
-    class_version = '0.2.0'
+    class_version = '0.3.0'
 
     default_path = 'lar_info'
     default_electron_mobility_params = np.array([551.6, 7158.3, 4440.43, 4.29, 43.63, 0.2053])
     default_electron_lifetime = 2.2e3  # us
     default_electron_lifetime_file = None
+    default_temp = 90 * units.K
+    default_mode = 1
 
     electron_lifetime_data_dtype = np.dtype([
         ('unix_s', 'f8'),
@@ -65,14 +70,16 @@ class LArData(H5FlowResource):
         self._electron_lifetime = params.get('electron_lifetime', self.default_electron_lifetime)
         self.electron_lifetime_file = params.get('electron_lifetime_file', self.default_electron_lifetime_file)
 
+        self.data = dict()
+        self.data['mode'] = params.get('mode', self.default_mode)
+        self.data['temp'] = params.get('temp', self.default_temp)
+
     def init(self, source_name):
         super(LArData, self).init(source_name)
 
         # create group (if not present)
         if not self.data_manager.attr_exists(self.path, 'classname'):
             # no data stored in file, generate it
-            self.data = dict()
-
             self.v_drift
             self.density
             self.ionization_w
@@ -87,6 +94,8 @@ class LArData(H5FlowResource):
             self._init_electron_lifetime()            
 
         if self.rank == 0:
+            logging.info(f'temp: {self.temp}')
+            logging.info(f'drift mode: {self.mode}')
             logging.info(f'v_drift: {self.v_drift}')
             logging.info(f'density: {self.density}')
             logging.info(f'W(ionization): {self.ionization_w}')
@@ -172,6 +181,16 @@ class LArData(H5FlowResource):
         )
 
     @property
+    def mode(self):
+        ''' choices for vdrift models '''
+        return self.data['mode']
+
+    @property
+    def temp(self):
+        ''' LAr temperature in K '''
+        return self.data['temp']
+
+    @property
     def ionization_w(self):
         ''' Ionization W-value in LAr in keV/e-. Fixed value of 0.0236 '''
         if 'ionization_w' in self.data:
@@ -243,16 +262,60 @@ class LArData(H5FlowResource):
         return self.density
 
     @property
-    def v_drift(self):
-        ''' Electron drift velocity in kV/mm '''
+    def v_drift(self, mode=1):
+        ''' 
+            Electron drift velocity in mm/us
+            
+            mode:
+            1. LArSoft (commonly used, a lot hard codded numbers here) 
+               Ref: https://internal.dunescience.org/doxygen/lardataalg_2lardataalg_2DetectorInfo_2DetectorPropertiesStandard_8cxx_source.html
+            2. BNL mobility measurement (see function electron_mobility())
+ 
+        '''
         if 'v_drift' in self.data:
             return self.data['v_drift']
 
         # get electric field from run data
-        e_field = resources['RunData'].e_field
+        e_field = resources['RunData'].e_field 
+
+        # get temperature from run data
+        temp = self.temp
+
+        # get the mode for v_drift model
+        mode = self.mode
 
         # calculate drift velocity
-        self.data['v_drift'] = self.electron_mobility(e_field) * e_field
+        if mode == 1:
+            # for low eField use mobility, but the parametrization is different than the BNL one
+            e_field = e_field / (units.kV / units.cm)
+            tdiff = temp - 87.302
+            eFit = 0.0938163 - 0.0052563 * tdiff - 0.000146981 * np.power(tdiff,2)
+            muFit = 5.183987 + 0.01447761 * tdiff - 0.0034972 * np.power(tdiff,2) - 0.0005162374 * np.power(tdiff,3)
+
+            # parameters for drift speed fit
+            # p1, p2, p3, p4, p5, p6, t0
+            ICARUS_params = np.array([-0.04640231, 0.0171171, 1.881246, 0.9940772, 0.0117183, 4.202141, 105.7491])
+            Walkowiak_params = np.array([-0.01481, -0.0075, 0.141, 12.4, 1.627, 0.317, 90.371])
+
+            # for low eField, vdrift model uses mobility * eField 
+            if e_field < eFit:
+                self.data['v_drift'] = muFit * e_field
+
+            # for intermediate eField, vdrift model uses ICARUS parametrization
+            elif e_field < 0.619:
+                self.data['v_drift'] = self.drift_speed_helper(ICARUS_params, e_field, temp)
+       
+            # for eField between two model ranges
+            elif e_field < 0.699:
+                self.data['v_drift'] = (0.699 - e_field) / 0.08 * self.drift_speed_helper(ICARUS_params, e_field, temp) \
+                                     + (e_field - 0.619) / 0.08 * self.drift_speed_helper(Walkowiak_params, e_field, temp)
+
+            # for high eField, vdrift model uses Walkowiak parametrization
+            else:
+                self.data['v_drift'] = self.drift_speed_helper(Walkowiak_params, e_field, temp)
+
+        if mode == 2:
+            self.data['v_drift'] = self.electron_mobility(e_field, temp) * e_field
 
         return self.v_drift
 
@@ -286,3 +349,15 @@ class LArData(H5FlowResource):
         mu = mu * ((units.cm**2) / units.V / units.s)
 
         return mu
+
+    def drift_speed_helper(self, params, e, t=87.17):
+        '''
+            Help function for drift speed calculation  w.r.t LAr temperature and electric field.
+        '''
+        p1, p2, p3, p4, p5, p6, t0 = params
+
+        vdrift = (1 + p1 * (t - t0) ) * (p3 * e * math.log(1 + abs(p4) / e) + p5 * np.power(e,p6)) + p2 * (t-t0)
+
+        return vdrift
+
+        
